@@ -1,0 +1,57 @@
+from pyspark.sql import SparkSession  				# Importing SparkSession for creating Spark application
+from pyspark.sql.functions import col, lit, concat_ws  		# Importing functions for column manipulation
+import boto3  							# Library for working with AWS S3
+import os  							# Library for interacting with the operating system
+
+os.environ['HADOOP_HOME'] = "C:\\Users\\KostaAcimovic\\Downloads\\hadoop-2.8.1"  		# Defining the Hadoop home directory
+os.environ['HADOOP_CONF_DIR'] = "C:\\Users\\KostaAcimovic\\Downloads\\hadoop-2.8.1\\bin"  	# Defining the Hadoop configuration directory
+
+spark = SparkSession.builder \
+    .appName("WeatherDataProcessing") \  					# Application name
+    .config("spark.security.manager.enabled", "false") \  			# Disabling Spark security manager
+    .getOrCreate()  								# Creating the Spark session
+
+bucket_name = "first-bucket-ka"  						# S3 bucket name
+prefix = "weather/"  								# Prefix for the folder within the bucket
+local_folder = "/weather_data/"  						# Local folder for temporary data storage
+
+s3_client = boto3.client('s3')  						# Creating boto3 client for S3
+
+def list_files(bucket, prefix):  						# Function to list files in S3 bucket under a given prefix
+    """List all files in an S3 bucket under a given prefix."""  		# Explaining the purpose of the function
+    files = []  # List for storing files
+    paginator = s3_client.get_paginator('list_objects_v2')  			# Paginator for S3 object search
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):  		# Iterating through pages
+        for content in page.get('Contents', []):  				# Iterating through each file in the page
+            files.append(content['Key'])  					# Adding the file to the list
+    return files  								# Returning the list of files
+
+files = list_files(bucket_name, prefix)  					# Calling the function to list files
+
+weather_df = spark.read.csv(  							# Using Spark to read CSV files
+    'C:\\Users\\KostaAcimovic\\Downloads\\weather_data\\*',  			# Path to local CSV files
+    header=True,  								# First row contains column names
+    inferSchema=True  								# Spark will automatically infer column data types
+)
+
+processed_df = weather_df \
+    .withColumn("datetime_iso", col("time_date")) \  				# Adding ISO date column
+    .withColumn("wind_speed_kmh", col("weather_windSpeed") * 3.6) \  		# Converting wind speed to km/h
+    .select(  									# Selecting relevant columns
+        col("location_name").alias("name"),  					# Renaming "location_name" column to "name"
+        col("datetime_iso"),  							# Keeping the "datetime_iso" column
+        col("weather_temperature").alias("temperature"),  			# Renaming "weather_temperature" to "temperature"
+        col("wind_speed_kmh")  							# Keeping the converted wind speed column
+    )
+
+output_path = "./processed_weather_data.csv"  					# Defining the output file path
+processed_df.coalesce(1).write.csv(  						# Creating one CSV file from multiple partitions
+    path=output_path,  								# Output file path
+    mode="overwrite",  								# Overwriting the existing file if it exists
+    header=True,  								# Keeping the header row
+    sep=";"  									# Using ";" as the delimiter
+)
+
+print(f"Processed file saved at {output_path}")  				# Printing the path of the saved file
+
+spark.stop()  									# Stopping the Spark session

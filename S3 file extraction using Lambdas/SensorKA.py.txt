@@ -1,0 +1,37 @@
+import boto3  							# Importing boto3 for interacting with AWS S3
+import os  							# Importing os for environment variable handling
+from concurrent.futures import ThreadPoolExecutor  		# Importing ThreadPoolExecutor for parallel execution
+
+s3_client = boto3.client('s3') 
+
+def copy_object(source_bucket, destination_bucket, file_key):
+    copy_source = {'Bucket': source_bucket, 'Key': file_key}  					# Defining the source bucket and file key
+    s3_client.copy_object(CopySource=copy_source, Bucket=destination_bucket, Key=file_key)  	# Copying the object to the destination bucket
+
+def lambda_handler(event, context):
+    source_bucket = os.getenv('SOURCE_BUCKET')  						# Getting the source bucket from environment variables
+    destination_bucket = os.getenv('DESTINATION_BUCKET')  					# Getting the destination bucket from environment variables
+    prefix = 'sensor/'  									# Prefix for S3 objects (folder path)
+    continuation_token = None  									# Initializing continuation token for pagination
+    response = s3_client.list_objects_v2(Bucket=source_bucket, Prefix=prefix, Delimiter='/')  	# Listing objects under the prefix
+
+    if 'CommonPrefixes' in response:  									# Checking if there are common prefixes (subfolders)
+        with ThreadPoolExecutor(max_workers = 15) as executor:  					# Using a thread pool for parallel file processing
+            for prefix_info in response['CommonPrefixes']: 						# Iterating through each prefix (subfolder)
+                prefix = prefix_info['Prefix']  							# Extracting the prefix from the response
+                if 'Novi Sad' in prefix:  								# Filtering the prefixes related to 'Novi Sad'
+                    while True:  									# Loop to handle pagination of S3 objects
+                        if not continuation_token:  							# If no continuation token, fetch the first page
+                            objects = s3_client.list_objects_v2(Bucket=source_bucket, 
+			    Prefix=prefix)
+                        else:  										# If a continuation token exists, fetch the next page of objects
+                            objects = s3_client.list_objects_v2(Bucket=source_bucket, 
+                            Prefix=prefix, ContinuationToken=continuation_token)
+                        if 'Contents' in objects:  								# If there are objects in the current page
+                            for obj in objects['Contents']:  							# Iterating over the objects
+                                file_key = obj['Key']  								# Extracting the object key (file path)
+                                executor.submit(copy_object, source_bucket, destination_bucket, file_key)  	# Submitting the copy task to the executor
+                        continuation_token = objects.get('NextContinuationToken')  				# Updating the continuation token for the next page
+                        if not continuation_token:  								# If no continuation token, stop the loop
+                            break
+    return {'statusCode': 200, 'body': f"Transferred files from {source_bucket}/{prefix} to {destination_bucket}"}  # Returning success response

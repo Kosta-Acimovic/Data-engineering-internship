@@ -1,0 +1,49 @@
+import sys  													# Importing sys module for system-specific parameters
+from pyspark.context import SparkContext  									# Importing SparkContext to initialize Spark
+from pyspark.sql import SparkSession  										# Importing SparkSession for working with DataFrames
+from awsglue.context import GlueContext  									# Importing GlueContext to integrate with AWS Glue
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType, TimestampType  	# Importing types for schema definition
+from pyspark.sql.functions import col, to_timestamp  								# Importing functions for column manipulation
+
+sc = SparkContext()  								# Creating a SparkContext for the Spark application
+glueContext = GlueContext(sc)  							# Creating a GlueContext to access Glue features
+spark = glueContext.spark_session  						# Creating a Spark session using GlueContext
+
+source_bucket = "s3://first-bucket-ka/pollution/**/*"  				# S3 source path for pollution data
+destination_bucket = "s3://first-bucket-ka/partitioned-data-pollution/"  	# S3 destination path for partitioned data
+
+# Define the schema explicitly based on the input file structure
+schema = StructType([  								# Defining the schema of the CSV file
+    StructField("name", StringType(), True),  					# Location name
+    StructField("time_nano", LongType(), True),  				# Timestamp in nanoseconds
+    StructField("time_date", StringType(), True),  				# Date and time as a string (convert later if needed)
+    StructField("location_latitude", DoubleType(), True),  			# Latitude
+    StructField("location_longitude", DoubleType(), True),  			# Longitude
+    StructField("location_name", StringType(), True),  				# Location description
+    StructField("measurement_pm10Atmo", DoubleType(), True),  				
+    StructField("measurement_pm25Atmo", DoubleType(), True),  
+    StructField("measurement_pm100Atmo", DoubleType(), True)  
+])
+
+weather_df = spark.read \
+    .option("header", "true") \  						# Reading header row
+    .option("delimiter", ",") \  						# Setting the delimiter for CSV
+    .schema(schema) \  								# Applying the defined schema
+    .csv(source_bucket)  							# Reading the CSV files from the source S3 bucket
+
+weather_df.printSchema()  							# Printing the schema of the DataFrame
+print("Count of rows in weather_df:", weather_df.count())  			# Printing the count of rows in the DataFrame
+weather_df.show(5)  								# Showing a preview of the first 5 rows
+
+weather_df = weather_df.withColumn("time_date", to_timestamp
+(col("time_date"), "yyyy-MM-dd HH:mm:ss"))  					# Converting the time_date string to a timestamp
+
+partitioned_df = weather_df.repartition(4, "time_date")  			# Repartitioning the data by time_date column
+
+partitioned_df.write \
+    .partitionBy("time_date") \  						# Partitioning the data by time_date
+    .mode("overwrite") \  							# Overwriting the existing data if it exists
+    .format("parquet") \  							# Saving the data in Parquet format
+    .save(destination_bucket)  							# Saving the data to the destination S3 bucket
+
+partitioned_df.show(10)  							# Showing a preview of the first 10 rows of the partitioned data
