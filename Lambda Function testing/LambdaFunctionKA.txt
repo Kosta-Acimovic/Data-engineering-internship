@@ -1,0 +1,70 @@
+import unittest
+from unittest.mock import patch, MagicMock
+import os
+from lambda_function import lambda_handler
+
+class TestLambdaHandler(unittest.TestCase):
+
+    @patch('boto3.client')
+    def test_lambda_handler_success(self, mock_boto_client):
+        mock_s3_client = MagicMock()
+        mock_boto_client.return_value = mock_s3_client
+
+        mock_s3_client.list_objects_v2.return_value = {
+            'CommonPrefixes': [{'Prefix': 'pollution/Novi Sad/'}, {'Prefix': 'pollution/Other/'}],
+            'Contents': [{'Key': 'pollution/Novi Sad/file1.csv'}, {'Key': 'pollution/Novi Sad/file2.csv'}]
+        }
+
+        mock_s3_client.copy_object = MagicMock()
+
+        os.environ['SOURCE_BUCKET'] = 'source-bucket'
+        os.environ['DESTINATION_BUCKET'] = 'destination-bucket'
+
+        sample_event = {}
+        sample_context = {}
+
+        response = lambda_handler(sample_event, sample_context)
+
+        mock_s3_client.list_objects_v2.assert_called_with(Bucket='source-bucket', Prefix='pollution/Novi Sad/')
+        mock_s3_client.copy_object.assert_any_call(
+            CopySource={'Bucket': 'source-bucket', 'Key': 'pollution/Novi Sad/file1.csv'},
+            Bucket='destination-bucket',
+            Key='pollution/Novi Sad/file1.csv'
+        )
+        mock_s3_client.copy_object.assert_any_call(
+            CopySource={'Bucket': 'source-bucket', 'Key': 'pollution/Novi Sad/file2.csv'},
+            Bucket='destination-bucket',
+            Key='pollution/Novi Sad/file2.csv'
+        )
+
+        self.assertEqual(response['statusCode'], 200)
+        self.assertIn('Transferred files', response['body'])
+
+    @patch('boto3.client')
+    def test_lambda_handler_no_matching_prefix(self, mock_boto_client):
+        mock_s3_client = MagicMock()
+        mock_boto_client.return_value = mock_s3_client
+
+        mock_s3_client.list_objects_v2.return_value = {
+            'CommonPrefixes': [{'Prefix': 'pollution/Other/'}],
+            'Contents': []
+        }
+
+        mock_s3_client.copy_object = MagicMock()
+
+        os.environ['SOURCE_BUCKET'] = 'source-bucket'
+        os.environ['DESTINATION_BUCKET'] = 'destination-bucket'
+
+        sample_event = {}
+        sample_context = {}
+
+        response = lambda_handler(sample_event, sample_context)
+
+        mock_s3_client.list_objects_v2.assert_called_with(Bucket='source-bucket', Prefix='pollution/', Delimiter='/')
+        mock_s3_client.copy_object.assert_not_called()
+
+        self.assertEqual(response['statusCode'], 200)
+        self.assertIn('Transferred files', response['body'])
+
+if __name__ == "__main__":
+    unittest.main()
